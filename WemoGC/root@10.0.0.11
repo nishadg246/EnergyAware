@@ -1,0 +1,106 @@
+from ouimeaux.environment import Environment
+from pymongo import MongoClient
+import time
+from datetime import datetime
+from twilio.rest import TwilioRestClient
+from timeout import timeout
+
+# Your Account Sid and Auth Token from twilio.com/user/account
+account_sid = "AC760a4ad9d6624d2bebf0c4acf632de6c"
+auth_token  = "884e32d004ede86dc6e458ca82a66de2"
+client = TwilioRestClient(account_sid, auth_token)
+ 
+last_sent=None
+
+def text(s):
+	message = client.messages.create(body=s,to="+16107149355",from_="+12672625546")
+	return message.sid
+
+
+mongo = MongoClient('www.nishadg.com:27017')
+db = mongo.wemo.reading
+db2 = mongo.wemo.state
+db3 = mongo.wemo.todo
+def on_switch(switch):
+	print "Switch found!", switch.name
+def on_motion(motion):
+	print "Motion found!", motion.name
+
+env = Environment(on_switch, on_motion)
+env.start()
+switches=env.list_switches()
+switchpair={}
+for s in switches:
+	switchpair[s]=env.get_switch(s)
+devicemap={}
+prev={}
+print switches
+
+@timeout(4)
+def getwrap(sw):
+	return sw.current_power
+
+@timeout(4)
+def execute(s):
+	if "turn" in s:
+		s.remove("turn")
+		if "off" in s:
+			s.remove("off")
+			switchpair[s[0]].off()
+		else:
+			s.remove("on")
+			switchpair[s[0]].on()
+	elif "switch" in s:
+		s.remove("switch")
+		if "off" in s:
+			s.remove("off")
+			switchpair[s[0]].off()
+		else:
+			s.remove("on")
+			switchpair[s[0]].on()
+	else:
+		if switchpair[s[1]].get_state():
+			text("its on")
+		else:
+			text("its off")
+
+
+def job():
+	global prev
+	for s in switchpair.keys():
+		sw=switchpair[s]
+		t=None
+		try: 
+			print "get"
+			t=getwrap(sw)
+			print "got"
+		except:
+			 pass
+		print "attempting"+s+"\n"
+		if t!=None:
+			print "posted\n"+s+"\n"
+			if s in prev:
+				if t==0 and prev[s]>0:
+					db2.insert_one({"time":datetime.now().isoformat(),"name":s,"change":"off"})
+				elif t>0 and prev[s]==0:
+					db2.insert_one({"time":datetime.now().isoformat(),"name":s,"change":"on"})
+			prev[s]=t
+			db.insert_one({"time":datetime.now().isoformat(),"name":s,"data":t})
+	print db3.count()
+	s=db3.find()
+	s=[i["data"] for i in s]
+	for instruct in s:
+		i=[ins.lower() for ins in instruct]
+		execute(i)
+	db3.delete_many({})
+		
+
+while True:
+	job()
+	time.sleep(10)
+# import atexit
+
+# @atexit.register
+# def leaving():
+# 	client.close()
+
